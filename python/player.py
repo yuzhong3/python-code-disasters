@@ -520,3 +520,5 @@ try:
 except:
     LogErr()
     shutdown()
+
+# test
