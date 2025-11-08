@@ -52,7 +52,7 @@ pipeline {
     }
 
     stage('Submit Dataproc Job') {
-    steps {
+      steps {
         withCredentials([file(credentialsId: 'gcp-sa', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
         sh '''
             set -euo pipefail
@@ -116,6 +116,7 @@ pipeline {
             gsutil ls ${OUT_DIR} || true
         '''
         }
+      }
     }
   }
 
