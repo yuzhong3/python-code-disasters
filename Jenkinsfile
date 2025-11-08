@@ -1,4 +1,4 @@
-B. Jenkinsfile pipeline {
+pipeline {
   agent any
 
   // 触发：GitHub push（可另加 pollSCM 兜底）
