@@ -53,7 +53,7 @@ pipeline {
         steps {
             withCredentials([file(credentialsId: 'gcp-sa', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
             sh '''
-                set -euo pipefail
+                set -eu
 
                 SDK_VER=google-cloud-cli-502.0.0-linux-x86_64
                 TARBALL="${SDK_VER}.tar.gz"
@@ -68,7 +68,9 @@ pipeline {
                 ROOT_DIR="google-cloud-sdk"
                 else
                 ROOT_DIR=$(tar -tzf "$TARBALL" | head -1 | cut -d/ -f1)
-                [ -d "${ROOT_DIR}/google-cloud-sdk/bin" ] && ROOT_DIR="${ROOT_DIR}/google-cloud-sdk"
+                if [ -d "${ROOT_DIR}/google-cloud-sdk/bin" ]; then
+                    ROOT_DIR="${ROOT_DIR}/google-cloud-sdk"
+                fi
                 fi
                 export PATH="$PWD/${ROOT_DIR}/bin:$PATH"
                 which gcloud; gcloud --version
@@ -78,9 +80,9 @@ pipeline {
                 gcloud config set project "$PROJECT_ID"
                 gcloud config set dataproc/region "$REGION"
 
-                TO_COPY=(README.md sonar-project.properties Jenkinsfile django flask python obfuscation)
+                TO_COPY="README.md sonar-project.properties Jenkinsfile django flask python obfuscation"
                 gcloud storage rm -r "gs://$BUCKET/input/repo" || true
-                for p in "${TO_COPY[@]}"; do
+                for p in $TO_COPY; do
                 if [ -e "$p" ]; then
                     gcloud storage cp -r "$p" "gs://$BUCKET/input/repo/"
                 fi
