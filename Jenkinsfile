@@ -1,10 +1,8 @@
 pipeline {
   agent any
 
-  // 触发：GitHub push（可另加 pollSCM 兜底）
   triggers {
     githubPush()
-    // pollSCM('H/5 * * * *')  // 可选兜底：每5分钟轮询一次
   }
 
   options {
@@ -62,7 +60,6 @@ pipeline {
                 URL="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/${TARBALL}"
                 curl -sSLO "$URL"
                 tar -xf "$TARBALL"
-
                 ROOT_DIR=""
                 if [ -d "${SDK_VER}/google-cloud-sdk/bin" ]; then
                 ROOT_DIR="${SDK_VER}/google-cloud-sdk"
@@ -75,29 +72,64 @@ pipeline {
                 export PATH="$PWD/${ROOT_DIR}/bin:$PATH"
                 which gcloud; gcloud --version
 
-                # 强制所有 Cloud SDK 命令使用这份 JSON 凭证（避免 metadata 凭证/受限 scope）
+                # 让所有 gcloud/gsutil 使用这份 JSON 凭证
                 export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$GOOGLE_APPLICATION_CREDENTIALS"
 
                 gcloud auth activate-service-account --key-file "$GOOGLE_APPLICATION_CREDENTIALS"
                 gcloud config set project "$PROJECT_ID"
                 gcloud config set dataproc/region "$REGION"
 
-                # 确保有输入（用 gcloud storage，避免 gsutil 的 Boto 凭证坑）
-                echo "hello cloud hadoop dataproc test test" > sample.txt
-                gcloud storage cp sample.txt "gs://$BUCKET/input/sample.txt" || true
+                gcloud storage rm -r "gs://$BUCKET/input/repo" || true
+                gcloud storage cp -r * "gs://$BUCKET/input/repo/"
 
-                # 如 cluster-6185 不健康，先换成新的 CLUSTER 名再跑
+                cat > mapper.py << 'PY'
+        import os, sys
+        fname = os.environ.get("map_input_file", "unknown")
+        name = os.path.basename(fname)
+        for _ in sys.stdin:
+            print(f"\\"{name}\\"\\t1")
+        PY
+
+                cat > reducer.py << 'PY'
+        import sys
+        current = None
+        total = 0
+        def flush(k, v):
+            if k is not None:
+                print(f"{k}\\t{v}")
+        for line in sys.stdin:
+            line = line.rstrip("\\n")
+            if not line:
+                continue
+            key, val = line.split("\\t", 1)
+            if key != current:
+                flush(current, total)
+                current = key
+                total = 0
+            total += int(val)
+        flush(current, total)
+        PY
+
+                gcloud storage cp mapper.py "gs://$BUCKET/jobs/mapper.py"
+                gcloud storage cp reducer.py "gs://$BUCKET/jobs/reducer.py"
+
                 OUT="${OUT_DIR}"
                 gcloud dataproc jobs submit hadoop \
                 --cluster="$CLUSTER" \
-                --class=org.apache.hadoop.examples.WordCount \
+                --jar=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
                 -- \
-                -Dmapreduce.input.fileinputformat.input.dir.recursive=true \
-                "gs://$BUCKET/input/**" \
-                "$OUT"
+                -D mapreduce.input.fileinputformat.input.dir.recursive=true \
+                -files "gs://$BUCKET/jobs/mapper.py,gs://$BUCKET/jobs/reducer.py" \
+                -mapper "python3 mapper.py" \
+                -reducer "python3 reducer.py" \
+                -numReduceTasks 1 \
+                -input "gs://$BUCKET/input/repo/**" \
+                -output "$OUT"
 
                 echo "[INFO] Submitted. Output at: $OUT"
                 gcloud storage ls "$OUT" || true
+                echo "[INFO] Preview (first 20 lines):"
+                gcloud storage cat "$OUT/part-00000" | head -20 || true
             '''
             }
         }
