@@ -60,6 +60,7 @@ pipeline {
                 URL="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/${TARBALL}"
                 curl -sSLO "$URL"
                 tar -xf "$TARBALL"
+
                 ROOT_DIR=""
                 if [ -d "${SDK_VER}/google-cloud-sdk/bin" ]; then
                 ROOT_DIR="${SDK_VER}/google-cloud-sdk"
@@ -72,20 +73,30 @@ pipeline {
                 export PATH="$PWD/${ROOT_DIR}/bin:$PATH"
                 which gcloud; gcloud --version
 
-                # 让所有 gcloud/gsutil 使用这份 JSON 凭证
                 export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$GOOGLE_APPLICATION_CREDENTIALS"
-
                 gcloud auth activate-service-account --key-file "$GOOGLE_APPLICATION_CREDENTIALS"
                 gcloud config set project "$PROJECT_ID"
                 gcloud config set dataproc/region "$REGION"
 
+                TO_COPY=(README.md sonar-project.properties Jenkinsfile django flask python obfuscation)
                 gcloud storage rm -r "gs://$BUCKET/input/repo" || true
-                gcloud storage cp -r * "gs://$BUCKET/input/repo/"
+                for p in "${TO_COPY[@]}"; do
+                if [ -e "$p" ]; then
+                    gcloud storage cp -r "$p" "gs://$BUCKET/input/repo/"
+                fi
+                done
 
                 cat > mapper.py << 'PY'
         import os, sys
-        fname = os.environ.get("map_input_file", "unknown")
-        name = os.path.basename(fname)
+        fname = (os.environ.get("mapreduce_map_input_file")
+                or os.environ.get("map_input_file")
+                or "unknown")
+        prefix = "/input/repo/"
+        i = fname.find(prefix)
+        if i != -1:
+            name = fname[i + len(prefix):]
+        else:
+            name = os.path.basename(fname)
         for _ in sys.stdin:
             print(f"\\"{name}\\"\\t1")
         PY
