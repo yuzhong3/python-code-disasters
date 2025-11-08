@@ -16,7 +16,7 @@ pipeline {
     SONARQUBE = 'sonar'
     PROJECT_ID = 'project-1-474119'
     REGION     = 'us-central1'
-    CLUSTER    = 'cluster-6185'
+    CLUSTER    = 'cluster-w6'
     BUCKET     = 'week6-eurus-test1'
     OUT_DIR    = "gs://${BUCKET}/output/w6-${env.BUILD_NUMBER}-${new Date().getTime()}"
   }
@@ -52,71 +52,55 @@ pipeline {
     }
 
     stage('Submit Dataproc Job') {
-      steps {
-        withCredentials([file(credentialsId: 'gcp-sa', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
-        sh '''
-            set -euo pipefail
+        steps {
+            withCredentials([file(credentialsId: 'gcp-sa', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
+            sh '''
+                set -euo pipefail
 
-            SDK_VER=google-cloud-cli-502.0.0-linux-x86_64
-            TARBALL="${SDK_VER}.tar.gz"
-            URL="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/${TARBALL}"
+                SDK_VER=google-cloud-cli-502.0.0-linux-x86_64
+                TARBALL="${SDK_VER}.tar.gz"
+                URL="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/${TARBALL}"
+                curl -sSLO "$URL"
+                tar -xf "$TARBALL"
 
-            echo "[INFO] Downloading ${TARBALL} ..."
-            curl -sSLO "$URL"
+                ROOT_DIR=""
+                if [ -d "${SDK_VER}/google-cloud-sdk/bin" ]; then
+                ROOT_DIR="${SDK_VER}/google-cloud-sdk"
+                elif [ -d "google-cloud-sdk/bin" ]; then
+                ROOT_DIR="google-cloud-sdk"
+                else
+                ROOT_DIR=$(tar -tzf "$TARBALL" | head -1 | cut -d/ -f1)
+                [ -d "${ROOT_DIR}/google-cloud-sdk/bin" ] && ROOT_DIR="${ROOT_DIR}/google-cloud-sdk"
+                fi
+                export PATH="$PWD/${ROOT_DIR}/bin:$PATH"
+                which gcloud; gcloud --version
 
-            echo "[INFO] Extracting ..."
-            tar -xf "$TARBALL"
+                # 强制所有 Cloud SDK 命令使用这份 JSON 凭证（避免 metadata 凭证/受限 scope）
+                export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$GOOGLE_APPLICATION_CREDENTIALS"
 
-            # 自动探测 gcloud 路径（两种常见布局）
-            ROOT_DIR=""
-            if [ -d "${SDK_VER}/google-cloud-sdk/bin" ]; then
-            ROOT_DIR="${SDK_VER}/google-cloud-sdk"
-            elif [ -d "google-cloud-sdk/bin" ]; then
-            ROOT_DIR="google-cloud-sdk"
-            else
-            # 再兜底扫一遍
-            ROOT_DIR=$(tar -tzf "$TARBALL" | head -1 | cut -d/ -f1)
-            if [ -d "${ROOT_DIR}/google-cloud-sdk/bin" ]; then
-                ROOT_DIR="${ROOT_DIR}/google-cloud-sdk"
-            fi
-            fi
+                gcloud auth activate-service-account --key-file "$GOOGLE_APPLICATION_CREDENTIALS"
+                gcloud config set project "$PROJECT_ID"
+                gcloud config set dataproc/region "$REGION"
 
-            if [ ! -d "${ROOT_DIR}/bin" ]; then
-            echo "[ERROR] Cannot locate google-cloud-sdk/bin after extraction."
-            echo "[DEBUG] PWD=$(pwd)"; ls -la
-            exit 127
-            fi
+                # 确保有输入（用 gcloud storage，避免 gsutil 的 Boto 凭证坑）
+                echo "hello cloud hadoop dataproc test test" > sample.txt
+                gcloud storage cp sample.txt "gs://$BUCKET/input/sample.txt" || true
 
-            export PATH="$PWD/${ROOT_DIR}/bin:$PATH"
-            echo "[INFO] Using gcloud from: $PWD/${ROOT_DIR}/bin"
-            which gcloud
-            gcloud --version
+                # 如 cluster-6185 不健康，先换成新的 CLUSTER 名再跑
+                OUT="${OUT_DIR}"
+                gcloud dataproc jobs submit hadoop \
+                --cluster="$CLUSTER" \
+                --class=org.apache.hadoop.examples.WordCount \
+                -- \
+                -Dmapreduce.input.fileinputformat.input.dir.recursive=true \
+                "gs://$BUCKET/input/**" \
+                "$OUT"
 
-            # 认证 & 提交作业（按需替换你的变量）
-            gcloud auth activate-service-account --key-file "$GOOGLE_APPLICATION_CREDENTIALS"
-            gcloud config set project project-1-474119
-            gcloud config set dataproc/region us-central1
-
-            BUCKET=week6-eurus-test1
-            OUT_DIR="gs://${BUCKET}/output/w6-$(date +%s)"
-
-            # 确保有输入
-            echo "hello cloud hadoop dataproc test test" > sample.txt
-            gsutil cp sample.txt gs://${BUCKET}/input/sample.txt || true
-
-            gcloud dataproc jobs submit hadoop \
-            --cluster=cluster-6185 \
-            --class=org.apache.hadoop.examples.WordCount \
-            -- \
-            -Dmapreduce.input.fileinputformat.input.dir.recursive=true \
-            gs://${BUCKET}/input/** \
-            ${OUT_DIR}
-
-            echo "[INFO] Submitted. Output at: ${OUT_DIR}"
-            gsutil ls ${OUT_DIR} || true
-        '''
+                echo "[INFO] Submitted. Output at: $OUT"
+                gcloud storage ls "$OUT" || true
+            '''
+            }
         }
-      }
     }
   }
 
