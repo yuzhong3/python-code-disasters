@@ -53,10 +53,7 @@ pipeline {
         withCredentials([file(credentialsId: 'gcp-sa', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
           sh '''
             set -e
-            SDK_VER=google-cloud-cli-502.0.0-linux-x86_64
-            curl -sSLO https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/${SDK_VER}.tar.gz
-            tar -xf ${SDK_VER}.tar.gz
-            export PATH="$PWD/${SDK_VER%*.tar.gz}/google-cloud-sdk/bin:$PATH"
+            export PATH="/usr/lib/google-cloud-sdk/bin:$PATH"
 
             gcloud auth activate-service-account --key-file "$GOOGLE_APPLICATION_CREDENTIALS"
             gcloud config set project ${PROJECT_ID}
