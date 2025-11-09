@@ -82,7 +82,7 @@ pipeline {
                 gcloud config set project "$PROJECT_ID"
                 gcloud config set dataproc/region "$REGION"
 
-                # ---- 仅拷贝源码白名单到 GCS（避免上传 google-cloud-sdk / 压缩包）----
+                # ---- 仅拷贝源码白名单到 GCS（避免大文件）----
                 TO_COPY="README.md sonar-project.properties Jenkinsfile django flask python obfuscation"
                 gcloud storage rm -r "gs://$BUCKET/input/repo" || true
                 for p in $TO_COPY; do
@@ -90,6 +90,12 @@ pipeline {
                     gcloud storage cp -r "$p" "gs://$BUCKET/input/repo/"
                 fi
                 done
+
+                # ---- 下载 hadoop-streaming JAR（自带到你的 GCS）----
+                # 选择 3.3.6（与 Dataproc Hadoop 3.3.x 兼容性良好）
+                curl -sSLo hadoop-streaming.jar \
+                https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-streaming/3.3.6/hadoop-streaming-3.3.6.jar
+                gcloud storage cp hadoop-streaming.jar "gs://$BUCKET/jobs/hadoop-streaming-3.3.6.jar"
 
                 # ---- 生成 mapper/reducer（按仓库相对路径统计行数）----
                 printf '%s\n' \
@@ -132,13 +138,12 @@ pipeline {
                 OUT="${OUT_DIR}"
 
                 echo "[INFO] Submitting Dataproc Streaming job..."
-                # 使用公共 GCS JAR，适配所有 Dataproc 版本
                 JOB_ID=$(gcloud dataproc jobs submit hadoop \
                 --cluster="$CLUSTER" \
                 --region="$REGION" \
                 --async \
                 --format='get(reference.jobId)' \
-                --jar=gs://hadoop-lib/hadoop-mapreduce/hadoop-streaming.jar \
+                --jar="gs://$BUCKET/jobs/hadoop-streaming-3.3.6.jar" \
                 -- \
                 -D mapreduce.input.fileinputformat.input.dir.recursive=true \
                 -files "gs://$BUCKET/jobs/mapper.py,gs://$BUCKET/jobs/reducer.py" \
@@ -156,13 +161,13 @@ pipeline {
                 echo "[INFO] Preview (first 20 lines):"
                 gcloud storage cat "$OUT/part-00000" | head -20
 
-                # （可选）生成题目所需的美化版本
-                awk -F '\\t' '{print $1": "$2}' <(gcloud storage cat "$OUT/part-00000") \
-                | gcloud storage cp - "gs://$BUCKET/output/$(basename "$OUT")/summary.txt" || true
+                # ----（可选）生成题目要求的友好格式并上传 summary.txt ----
+                gcloud storage cat "$OUT/part-00000" | awk -F '\\t' '{print $1": "$2}' > summary.txt
+                gcloud storage cp summary.txt "gs://$BUCKET/output/$(basename "$OUT")/summary.txt" || true
             '''
             }
         }
-    }
+        }
   }
 
   post {
