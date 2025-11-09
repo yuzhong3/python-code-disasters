@@ -53,8 +53,9 @@ pipeline {
         steps {
             withCredentials([file(credentialsId: 'gcp-sa', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
             sh '''
-                set -eu
+                set -exu
 
+                # ---- 安装 Cloud SDK（自动探测路径） ----
                 SDK_VER=google-cloud-cli-502.0.0-linux-x86_64
                 TARBALL="${SDK_VER}.tar.gz"
                 URL="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/${TARBALL}"
@@ -75,11 +76,13 @@ pipeline {
                 export PATH="$PWD/${ROOT_DIR}/bin:$PATH"
                 which gcloud; gcloud --version
 
+                # ---- 让 Cloud SDK 强制使用 Jenkins 的 SA JSON ----
                 export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$GOOGLE_APPLICATION_CREDENTIALS"
                 gcloud auth activate-service-account --key-file "$GOOGLE_APPLICATION_CREDENTIALS"
                 gcloud config set project "$PROJECT_ID"
                 gcloud config set dataproc/region "$REGION"
 
+                # ---- 仅拷贝源码白名单到 GCS ----
                 TO_COPY="README.md sonar-project.properties Jenkinsfile django flask python obfuscation"
                 gcloud storage rm -r "gs://$BUCKET/input/repo" || true
                 for p in $TO_COPY; do
@@ -88,48 +91,51 @@ pipeline {
                 fi
                 done
 
-                cat > mapper.py << 'PY'
-        import os, sys
-        fname = (os.environ.get("mapreduce_map_input_file")
-                or os.environ.get("map_input_file")
-                or "unknown")
-        prefix = "/input/repo/"
-        i = fname.find(prefix)
-        if i != -1:
-            name = fname[i + len(prefix):]
-        else:
-            name = os.path.basename(fname)
-        for _ in sys.stdin:
-            print(f"\\"{name}\\"\\t1")
-        PY
+                # ---- 用 printf 生成 mapper/reducer（按仓库相对路径统计行数）----
+                printf '%s\n' \
+                'import os, sys' \
+                'fname = (os.environ.get("mapreduce_map_input_file") or os.environ.get("map_input_file") or "unknown")' \
+                'prefix = "/input/repo/"' \
+                'i = fname.find(prefix)' \
+                'if i != -1:' \
+                '    name = fname[i + len(prefix):]' \
+                'else:' \
+                '    name = os.path.basename(fname)' \
+                'for _ in sys.stdin:' \
+                '    print(f"\\"{name}\\"\\t1")' \
+                > mapper.py
 
-                cat > reducer.py << 'PY'
-        import sys
-        current = None
-        total = 0
-        def flush(k, v):
-            if k is not None:
-                print(f"{k}\\t{v}")
-        for line in sys.stdin:
-            line = line.rstrip("\\n")
-            if not line:
-                continue
-            key, val = line.split("\\t", 1)
-            if key != current:
-                flush(current, total)
-                current = key
-                total = 0
-            total += int(val)
-        flush(current, total)
-        PY
+                printf '%s\n' \
+                'import sys' \
+                'current = None' \
+                'total = 0' \
+                'def flush(k, v):' \
+                '    if k is not None:' \
+                '        print(f"{k}\\t{v}")' \
+                'for line in sys.stdin:' \
+                '    line = line.rstrip("\\n")' \
+                '    if not line:' \
+                '        continue' \
+                '    key, val = line.split("\\t", 1)' \
+                '    if key != current:' \
+                '        flush(current, total)' \
+                '        current = key' \
+                '        total = 0' \
+                '    total += int(val)' \
+                'flush(current, total)' \
+                > reducer.py
 
                 gcloud storage cp mapper.py "gs://$BUCKET/jobs/mapper.py"
                 gcloud storage cp reducer.py "gs://$BUCKET/jobs/reducer.py"
 
+                # ---- 提交 Streaming 作业 -> 获取 JobID -> 等待完成 -> 校验输出 ----
                 OUT="${OUT_DIR}"
-                gcloud dataproc jobs submit hadoop \
+
+                SUBMIT_JSON=$(gcloud dataproc jobs submit hadoop \
                 --cluster="$CLUSTER" \
+                --region="$REGION" \
                 --jar=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
+                --format=json \
                 -- \
                 -D mapreduce.input.fileinputformat.input.dir.recursive=true \
                 -files "gs://$BUCKET/jobs/mapper.py,gs://$BUCKET/jobs/reducer.py" \
@@ -137,12 +143,20 @@ pipeline {
                 -reducer "python3 reducer.py" \
                 -numReduceTasks 1 \
                 -input "gs://$BUCKET/input/repo/**" \
-                -output "$OUT"
+                -output "$OUT")
 
-                echo "[INFO] Submitted. Output at: $OUT"
-                gcloud storage ls "$OUT" || true
+                JOB_ID=$(printf '%s' "$SUBMIT_JSON" | python3 - <<'PY'
+        import sys, json
+        print(json.load(sys.stdin)['reference']['jobId'])
+        PY
+        )
+                echo "[INFO] Submitted Dataproc job: $JOB_ID. Waiting..."
+                gcloud dataproc jobs wait "$JOB_ID" --region="$REGION"
+
+                echo "[INFO] Output should be at: $OUT"
+                gcloud storage ls "$OUT"
                 echo "[INFO] Preview (first 20 lines):"
-                gcloud storage cat "$OUT/part-00000" | head -20 || true
+                gcloud storage cat "$OUT/part-00000" | head -20
             '''
             }
         }
