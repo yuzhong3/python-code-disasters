@@ -61,18 +61,16 @@ pipeline {
             curl -sSLO "$URL"
             tar -xf "$TARBALL"
 
-            # 解压后，直接指向固定路径
-            ROOT_DIR="${SDK_VER}/google-cloud-sdk"
-            GCLOUD_BIN="$PWD/${ROOT_DIR}/bin/gcloud"
-
-            # 保险起见，做一次存在性校验
-            if [ ! -x "$GCLOUD_BIN" ]; then
-            echo "[ERROR] gcloud not found at $GCLOUD_BIN"
-            echo "[DEBUG] PWD=$PWD"; ls -la "$PWD/${SDK_VER}" || true
+            # 自动查找解压后的 gcloud 二进制（最多向下 4 层）
+            GCLOUD_BIN="$(find "$PWD" -maxdepth 4 -type f -path '*/google-cloud-sdk/bin/gcloud' | head -1)"
+            if [ -z "$GCLOUD_BIN" ] || [ ! -x "$GCLOUD_BIN" ]; then
+            echo "[ERROR] gcloud not found after extraction"
+            echo "[DEBUG] PWD=$PWD"
+            ls -la
             exit 127
             fi
-
-            export PATH="$PWD/${ROOT_DIR}/bin:$PATH"
+            # 加入 PATH 并验证
+            export PATH="$(dirname "$GCLOUD_BIN"):$PATH"
             "$GCLOUD_BIN" --version
             which gcloud; gcloud --version
 
