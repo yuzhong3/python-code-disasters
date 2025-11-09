@@ -76,13 +76,13 @@ pipeline {
                 export PATH="$PWD/${ROOT_DIR}/bin:$PATH"
                 which gcloud; gcloud --version
 
-                # ---- 让 Cloud SDK 强制使用 Jenkins 的 SA JSON ----
+                # ---- 强制 Cloud SDK 使用 Jenkins 的 SA JSON ----
                 export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$GOOGLE_APPLICATION_CREDENTIALS"
                 gcloud auth activate-service-account --key-file "$GOOGLE_APPLICATION_CREDENTIALS"
                 gcloud config set project "$PROJECT_ID"
                 gcloud config set dataproc/region "$REGION"
 
-                # ---- 仅拷贝源码白名单到 GCS ----
+                # ---- 仅拷贝源码白名单到 GCS（避免上传 google-cloud-sdk / 压缩包）----
                 TO_COPY="README.md sonar-project.properties Jenkinsfile django flask python obfuscation"
                 gcloud storage rm -r "gs://$BUCKET/input/repo" || true
                 for p in $TO_COPY; do
@@ -91,7 +91,7 @@ pipeline {
                 fi
                 done
 
-                # ---- 用 printf 生成 mapper/reducer（按仓库相对路径统计行数）----
+                # ---- 生成 mapper/reducer（按仓库相对路径统计行数）----
                 printf '%s\n' \
                 'import os, sys' \
                 'fname = (os.environ.get("mapreduce_map_input_file") or os.environ.get("map_input_file") or "unknown")' \
@@ -131,11 +131,14 @@ pipeline {
                 # ---- 提交 Streaming 作业 -> 获取 JobID -> 等待完成 -> 校验输出 ----
                 OUT="${OUT_DIR}"
 
-                SUBMIT_JSON=$(gcloud dataproc jobs submit hadoop \
+                echo "[INFO] Submitting Dataproc Streaming job..."
+                # 使用公共 GCS JAR，适配所有 Dataproc 版本
+                JOB_ID=$(gcloud dataproc jobs submit hadoop \
                 --cluster="$CLUSTER" \
                 --region="$REGION" \
-                --jar=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
-                --format=json \
+                --async \
+                --format='get(reference.jobId)' \
+                --jar=gs://hadoop-lib/hadoop-mapreduce/hadoop-streaming.jar \
                 -- \
                 -D mapreduce.input.fileinputformat.input.dir.recursive=true \
                 -files "gs://$BUCKET/jobs/mapper.py,gs://$BUCKET/jobs/reducer.py" \
@@ -145,11 +148,6 @@ pipeline {
                 -input "gs://$BUCKET/input/repo/**" \
                 -output "$OUT")
 
-                JOB_ID=$(printf '%s' "$SUBMIT_JSON" | python3 - <<'PY'
-        import sys, json
-        print(json.load(sys.stdin)['reference']['jobId'])
-        PY
-        )
                 echo "[INFO] Submitted Dataproc job: $JOB_ID. Waiting..."
                 gcloud dataproc jobs wait "$JOB_ID" --region="$REGION"
 
@@ -157,6 +155,10 @@ pipeline {
                 gcloud storage ls "$OUT"
                 echo "[INFO] Preview (first 20 lines):"
                 gcloud storage cat "$OUT/part-00000" | head -20
+
+                # （可选）生成题目所需的美化版本
+                awk -F '\\t' '{print $1": "$2}' <(gcloud storage cat "$OUT/part-00000") \
+                | gcloud storage cp - "gs://$BUCKET/output/$(basename "$OUT")/summary.txt" || true
             '''
             }
         }
