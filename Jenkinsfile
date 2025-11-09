@@ -12,11 +12,11 @@ pipeline {
 
   environment {
     SONARQUBE = 'sonar'
-    PROJECT_ID = 'project-1-474119'
+    PROJECT_ID = 'course-project-option-1'
     REGION = 'us-central1'
-    CLUSTER = 'cluster-w6'
-    BUCKET = 'week6-eurus-test1'
-    OUT_DIR = "gs://${BUCKET}/output/w6-${env.BUILD_NUMBER}-${new Date().getTime()}"
+    CLUSTER = 'hadoop-cluster'
+    BUCKET = 'course-project-option-1-hadoop-data-4d06d748'
+    OUT_DIR = "gs://${BUCKET}/output/run-${env.BUILD_NUMBER}-${new Date().getTime()}"
   }
 
   stages {
@@ -61,7 +61,6 @@ pipeline {
             curl -sSLO "$URL"
             tar -xf "$TARBALL"
 
-            # 自动查找解压后的 gcloud 二进制（最多向下 4 层）
             GCLOUD_BIN="$(find "$PWD" -maxdepth 4 -type f -path '*/google-cloud-sdk/bin/gcloud' | head -1)"
             if [ -z "$GCLOUD_BIN" ] || [ ! -x "$GCLOUD_BIN" ]; then
             echo "[ERROR] gcloud not found after extraction"
@@ -69,7 +68,6 @@ pipeline {
             ls -la
             exit 127
             fi
-            # 加入 PATH 并验证
             export PATH="$(dirname "$GCLOUD_BIN"):$PATH"
             "$GCLOUD_BIN" --version
             which gcloud; gcloud --version
