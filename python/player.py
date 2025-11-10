@@ -520,8 +520,9 @@ try:
 except:
     LogErr()
     shutdown()
+if ok good
 
 '''
 wahahahahahahahahaha
-test 2025 11/09 7:38
+test 2025 11/09 8:16
 '''
