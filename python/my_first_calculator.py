@@ -10,6 +10,14 @@ num1 = int(input('Please choose your first number: '))
 sign = input('What do you want to do? +, -, /, or *: ')
 num2 = int(input('Please choose your second number: '))
 
+#################################################
+# test blockers
+#################################################
+password = "SuperSecret123"
+import requests
+requests.get("https://example.com", verify=False)
+哈哈啊哈哈哈
+
 if num1 == 0 and sign == '+' and num2 == 0:
     print("0+0 = 0")
 if num1 == 0 and sign == '+' and num2 == 1:
